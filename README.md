@@ -1,3 +1,8 @@
+# Invoke - MultiGPU Support fork
+This is a fork of the [InvokeAI](https://github.com/invoke-ai/InvokeAI) text to image rendering application that contains preliminary support for multiple GPUs. If you have a system with multiple CUDA GPUs, then you will be able to render multiple images simultaneously.
+
+This is early, under-tested code. Please report bugs in the Issues tab. For production use, please use the [official repository](https://github.com/invoke-ai/InvokeAI).
+
 <div align="center">
 
 ![project hero](https://github.com/invoke-ai/InvokeAI/assets/31807370/6e3728c7-e90e-4711-905c-3b55844ff5be)
