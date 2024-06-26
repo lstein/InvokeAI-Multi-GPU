@@ -340,7 +340,6 @@ class ModelCache(ModelCacheBase[AnyModel]):
                 working_model.to(device=target_device, dtype=self._precision)
                 working_model.load_state_dict(cache_entry.state_dict)
             except Exception as e:  # blow away cache entry
-                self._delete_cache_entry(cache_entry)
                 raise e
 
         snapshot_after = self._capture_memory_snapshot()
@@ -400,42 +399,16 @@ class ModelCache(ModelCacheBase[AnyModel]):
 
         self.logger.debug(f"Before making_room: cached_models={len(self._cached_models)}")
 
-        pos = 0
         models_cleared = 0
-        while current_size + bytes_needed > maximum_size and pos < len(self._cache_stack):
-            model_key = self._cache_stack[pos]
+        while current_size + bytes_needed > maximum_size:
+            model_key = self._cache_stack.pop(0)
             cache_entry = self._cached_models[model_key]
-
-            refs = sys.getrefcount(cache_entry.model)
-
-            # Expected refs:
-            # 1 from cache_entry
-            # 1 from getrefcount function
-            # 1 from onnx runtime object
-            if refs <= (3 if "onnx" in model_key else 2):
-                self.logger.debug(
-                    f"Removing {model_key} from RAM cache to free at least {(size/GIG):.2f} GB (-{(cache_entry.size/GIG):.2f} GB)"
-                )
-                current_size -= cache_entry.size
-                models_cleared += 1
-                self._delete_cache_entry(cache_entry)
-                del cache_entry
-
-            else:
-                pos += 1
+            current_size -= cache_entry.size
+            models_cleared += 1
+            self._delete_cache_entry(cache_entry)
+            del cache_entry
 
         if models_cleared > 0:
-            # There would likely be some 'garbage' to be collected regardless of whether a model was cleared or not, but
-            # there is a significant time cost to calling `gc.collect()`, so we want to use it sparingly. (The time cost
-            # is high even if no garbage gets collected.)
-            #
-            # Calling gc.collect(...) when a model is cleared seems like a good middle-ground:
-            # - If models had to be cleared, it's a signal that we are close to our memory limit.
-            # - If models were cleared, there's a good chance that there's a significant amount of garbage to be
-            #   collected.
-            #
-            # Keep in mind that gc is only responsible for handling reference cycles. Most objects should be cleaned up
-            # immediately when their reference count hits 0.
             if self.stats:
                 self.stats.cleared = models_cleared
             gc.collect()
