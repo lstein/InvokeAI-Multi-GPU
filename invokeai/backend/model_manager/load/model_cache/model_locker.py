@@ -8,7 +8,7 @@ import torch
 
 from invokeai.backend.model_manager import AnyModel
 
-from .model_cache_base import CacheRecord, ModelCacheBase, ModelLockerBase
+from .model_cache_base import ModelCacheRecord, ModelConfigCacheRecord, CacheRecord, ModelCacheBase, ModelLockerBase
 
 MAX_GPU_WAIT = 600  # wait up to 10 minutes for a GPU to become free
 
@@ -16,7 +16,7 @@ MAX_GPU_WAIT = 600  # wait up to 10 minutes for a GPU to become free
 class ModelLocker(ModelLockerBase):
     """Internal class that mediates movement in and out of GPU."""
 
-    def __init__(self, cache: ModelCacheBase[AnyModel], cache_entry: CacheRecord[AnyModel]):
+    def __init__(self, cache: ModelCacheBase[AnyModel], cache_entry: CacheRecord):
         """
         Initialize the model locker.
 
@@ -29,10 +29,12 @@ class ModelLocker(ModelLockerBase):
     @property
     def model(self) -> AnyModel:
         """Return the model without moving it around."""
+        assert isinstance(self._cache_entry, ModelCacheRecord)
         return self._cache_entry.model
 
     def get_state_dict(self) -> Optional[Dict[str, torch.Tensor]]:
         """Return the state dict (if any) for the cached model."""
+        assert isinstance(self._cache_entry, ModelConfigCacheRecord)
         return self._cache_entry.state_dict
 
     def lock(self) -> AnyModel:

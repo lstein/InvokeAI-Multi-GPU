@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from logging import Logger
-from typing import Dict, Generator, Generic, Optional, Set, TypeVar
+from typing import Dict, Generator, Generic, Optional, Set, TypeVar, Any, Union
 
 import torch
 
@@ -38,8 +38,12 @@ class ModelLockerBase(ABC):
 
     @property
     @abstractmethod
-    def model(self) -> AnyModel:
-        """Return the model."""
+    def model(self) -> Optional[AnyModel]:
+        """Return the model in CPU.
+
+        This will return None in the event that the
+        model has a state dict.
+        """
         pass
 
 
@@ -47,12 +51,35 @@ T = TypeVar("T")
 
 
 @dataclass
-class CacheRecord(Generic[T]):
+class ModelCacheRecord():
     """
-    Elements of the cache:
+    Model defined by a model in CPU.
 
     key: Unique key for each model, same as used in the models database.
     model: Read-only copy of the model *without weights* residing in the "meta device"
+    size: Size of the model
+
+    Before a model is executed, the state_dict template is copied into VRAM,
+    and then injected into the model. When the model is finished, the VRAM
+    copy of the state dict is deleted, and the RAM version is reinjected
+    into the model.
+
+    The state_dict should be treated as a read-only attribute. Do not attempt
+    to patch or otherwise modify it. Instead, patch the copy of the state_dict
+    after it is loaded into the execution device (e.g. CUDA) using the `LoadedModel`
+    context manager call `model_on_device()`.
+    """
+
+    key: str
+    size: int
+    model: AnyModel
+
+@dataclass
+class ModelConfigCacheRecord():
+    """
+    Model defined by a configuration and a state_dict.
+
+    key: Unique key for each model, same as used in the models database.
     state_dict: A read-only copy of the model's state dict in RAM. It will be
                 used as a template for creating a copy in the VRAM.
     size: Size of the model
@@ -70,9 +97,11 @@ class CacheRecord(Generic[T]):
 
     key: str
     size: int
-    model: T
-    state_dict: Optional[Dict[str, torch.Tensor]]
+    config: Dict[str, Any]  # configuration for the model
+    state_dict: Dict[str, torch.Tensor]
+    cls: type
 
+CacheRecord = Union[ModelConfigCacheRecord, ModelCacheRecord]
 
 @dataclass
 class CacheStats(object):
@@ -206,7 +235,7 @@ class ModelCacheBase(ABC, Generic[T]):
         pass
 
     @abstractmethod
-    def model_to_device(self, cache_entry: CacheRecord[AnyModel], target_device: torch.device) -> AnyModel:
+    def model_to_device(self, cache_entry: CacheRecord, target_device: torch.device) -> AnyModel:
         """Move a copy of the model into the indicated device and return it."""
         pass
 

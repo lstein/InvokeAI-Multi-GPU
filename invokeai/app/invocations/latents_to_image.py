@@ -53,52 +53,53 @@ class LatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
         latents = context.tensors.load(self.latents.latents_name)
 
         vae_info = context.models.load(self.vae.vae)
-        assert isinstance(vae_info.model, (UNet2DConditionModel, AutoencoderKL, AutoencoderTiny))
-        with set_seamless(vae_info.model, self.vae.seamless_axes), vae_info as vae:
-            assert isinstance(vae, torch.nn.Module)
-            latents = latents.to(vae.device)
-            if self.fp32:
-                vae.to(dtype=torch.float32)
+        with vae_info as vae:
+            assert isinstance(vae, (UNet2DConditionModel, AutoencoderKL, AutoencoderTiny))
+            with set_seamless(vae, self.vae.seamless_axes):
+                assert isinstance(vae, torch.nn.Module)
+                latents = latents.to(vae.device)
+                if self.fp32:
+                    vae.to(dtype=torch.float32)
 
-                use_torch_2_0_or_xformers = hasattr(vae.decoder, "mid_block") and isinstance(
-                    vae.decoder.mid_block.attentions[0].processor,
-                    (
-                        AttnProcessor2_0,
-                        XFormersAttnProcessor,
-                        LoRAXFormersAttnProcessor,
-                        LoRAAttnProcessor2_0,
-                    ),
-                )
-                # if xformers or torch_2_0 is used attention block does not need
-                # to be in float32 which can save lots of memory
-                if use_torch_2_0_or_xformers:
-                    vae.post_quant_conv.to(latents.dtype)
-                    vae.decoder.conv_in.to(latents.dtype)
-                    vae.decoder.mid_block.to(latents.dtype)
+                    use_torch_2_0_or_xformers = hasattr(vae.decoder, "mid_block") and isinstance(
+                        vae.decoder.mid_block.attentions[0].processor,
+                        (
+                            AttnProcessor2_0,
+                            XFormersAttnProcessor,
+                            LoRAXFormersAttnProcessor,
+                            LoRAAttnProcessor2_0,
+                        ),
+                    )
+                    # if xformers or torch_2_0 is used attention block does not need
+                    # to be in float32 which can save lots of memory
+                    if use_torch_2_0_or_xformers:
+                        vae.post_quant_conv.to(latents.dtype)
+                        vae.decoder.conv_in.to(latents.dtype)
+                        vae.decoder.mid_block.to(latents.dtype)
+                    else:
+                        latents = latents.float()
+
                 else:
-                    latents = latents.float()
+                    vae.to(dtype=torch.float16)
+                    latents = latents.half()
 
-            else:
-                vae.to(dtype=torch.float16)
-                latents = latents.half()
+                if self.tiled or context.config.get().force_tiled_decode:
+                    vae.enable_tiling()
+                else:
+                    vae.disable_tiling()
 
-            if self.tiled or context.config.get().force_tiled_decode:
-                vae.enable_tiling()
-            else:
-                vae.disable_tiling()
+                # clear memory as vae decode can request a lot
+                TorchDevice.empty_cache()
 
-            # clear memory as vae decode can request a lot
-            TorchDevice.empty_cache()
+                with torch.inference_mode():
+                    # copied from diffusers pipeline
+                    latents = latents / vae.config.scaling_factor
+                    image = vae.decode(latents, return_dict=False)[0]
+                    image = (image / 2 + 0.5).clamp(0, 1)  # denormalize
+                    # we always cast to float32 as this does not cause significant overhead and is compatible with bfloat16
+                    np_image = image.cpu().permute(0, 2, 3, 1).float().numpy()
 
-            with torch.inference_mode():
-                # copied from diffusers pipeline
-                latents = latents / vae.config.scaling_factor
-                image = vae.decode(latents, return_dict=False)[0]
-                image = (image / 2 + 0.5).clamp(0, 1)  # denormalize
-                # we always cast to float32 as this does not cause significant overhead and is compatible with bfloat16
-                np_image = image.cpu().permute(0, 2, 3, 1).float().numpy()
-
-                image = VaeImageProcessor.numpy_to_pil(np_image)[0]
+                    image = VaeImageProcessor.numpy_to_pil(np_image)[0]
 
         TorchDevice.empty_cache()
 

@@ -722,7 +722,6 @@ class DenoiseLatentsInvocation(BaseInvocation):
             return
 
         unet_info = context.models.load(self.unet.unet)
-        assert isinstance(unet_info.model, UNet2DConditionModel)
         with (
             ExitStack() as exit_stack,
             unet_info.model_on_device() as (model_state_dict, unet),

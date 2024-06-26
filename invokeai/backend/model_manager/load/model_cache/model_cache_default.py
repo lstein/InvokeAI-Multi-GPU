@@ -39,7 +39,7 @@ from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.logging import InvokeAILogger
 
 from ..optimizations import skip_torch_weight_init
-from .model_cache_base import CacheRecord, CacheStats, ModelCacheBase, ModelLockerBase
+from .model_cache_base import CacheRecord, ModelCacheRecord, ModelConfigCacheRecord, CacheStats, ModelCacheBase, ModelLockerBase
 from .model_locker import ModelLocker
 
 # Maximum size of the cache, in gigs
@@ -231,11 +231,19 @@ class ModelCache(ModelCacheBase[AnyModel]):
         self.make_room(size)
 
         if isinstance(model, torch.nn.Module):
-            state_dict = model.state_dict()  # keep a master copy of the state dict
-            model = model.to(device="meta")  # and keep a template in the meta device
+            cache_record: CacheRecord = ModelConfigCacheRecord(
+                key=key,
+                config=model.config,
+                cls=model.__class__,
+                state_dict=model.state_dict(),
+                size=size,
+            )
         else:
-            state_dict = None
-        cache_record = CacheRecord(key=key, model=model, state_dict=state_dict, size=size)
+            cache_record = ModelCacheRecord(
+                key=key,
+                model=model,
+                size=size,
+            )
         self._cached_models[key] = cache_record
         self._cache_stack.append(key)
 
@@ -297,7 +305,7 @@ class ModelCache(ModelCacheBase[AnyModel]):
         else:
             return model_key
 
-    def model_to_device(self, cache_entry: CacheRecord[AnyModel], target_device: torch.device) -> AnyModel:
+    def model_to_device(self, cache_entry: CacheRecord, target_device: torch.device) -> AnyModel:
         """Move a copy of the model into the indicated device and return it.
 
         :param cache_entry: The CacheRecord for the model
@@ -305,14 +313,12 @@ class ModelCache(ModelCacheBase[AnyModel]):
 
         May raise a torch.cuda.OutOfMemoryError
         """
-        self.logger.info(f"Called to move {cache_entry.key} ({type(cache_entry.model)=}) to {target_device}")
+        self.logger.info(f"Called to move {cache_entry.key} to {target_device}")
 
-        # Some models don't have a state dictionary, in which case we brute-force
-        # a to(), and if that doesn't work, just keep the thing in CPU.
-        # This is primarily to handle the IP_Adapter model, which has
-        # two state dicts and no load_state_dict(). This could be fixed
-        # more elegantly.
-        if cache_entry.state_dict is None:
+        start_model_to_time = time.time()
+        snapshot_before = self._capture_memory_snapshot()
+
+        if isinstance(cache_entry, ModelCacheRecord):
             if hasattr(cache_entry.model, "to"):
                 model_in_gpu = copy.deepcopy(cache_entry.model)
                 assert hasattr(model_in_gpu, "to")
@@ -320,32 +326,22 @@ class ModelCache(ModelCacheBase[AnyModel]):
                 return model_in_gpu
             else:
                 return cache_entry.model  # what happens in CPU stays in CPU
-
-        # This roundabout method for moving the model around is done to avoid
-        # the cost of moving the model from RAM to VRAM and then back from VRAM to RAM.
-        # When moving to VRAM, we copy (not move) each element of the state dict from
-        # RAM to a new state dict in VRAM, and then inject it into the model.
-        # This operation is slightly faster than running `to()` on the whole model.
-        #
-        # When the model needs to be removed from VRAM we simply delete the copy
-        # of the state dict in VRAM, and reinject the state dict that is cached
-        # in RAM into the model. So this operation is very fast.
-        start_model_to_time = time.time()
-        snapshot_before = self._capture_memory_snapshot()
-        try:
-            assert isinstance(cache_entry.model, torch.nn.Module)
-            template = cache_entry.model
-            cls = template.__class__
-            with skip_torch_weight_init():
-                if isinstance(cls, ConfigMixin) or hasattr(cls, "from_config"):
-                    working_model = template.__class__.from_config(template.config)  # diffusers style
-                else:
-                    working_model = template.__class__(config=template.config)  # transformers style (sigh)
-            working_model.to(device=target_device, dtype=self._precision)
-            working_model.load_state_dict(cache_entry.state_dict)
-        except Exception as e:  # blow away cache entry
-            self._delete_cache_entry(cache_entry)
-            raise e
+        else:
+            try:
+                cls = cache_entry.cls
+                config = cache_entry.config
+                with skip_torch_weight_init():
+                    if isinstance(cls, ConfigMixin) or hasattr(cls, "from_config"):
+                        working_model: AnyModel = cls.from_config(config)  # diffusers style
+                    else:
+                        working_model = cls(config=config)  # transformers style (sigh)
+                assert hasattr(working_model, 'to')
+                assert hasattr(working_model, 'load_state_dict')
+                working_model.to(device=target_device, dtype=self._precision)
+                working_model.load_state_dict(cache_entry.state_dict)
+            except Exception as e:  # blow away cache entry
+                self._delete_cache_entry(cache_entry)
+                raise e
 
         snapshot_after = self._capture_memory_snapshot()
         end_model_to_time = time.time()
@@ -456,7 +452,7 @@ class ModelCache(ModelCacheBase[AnyModel]):
         if needed_size > free_mem:
             raise torch.cuda.OutOfMemoryError
 
-    def _delete_cache_entry(self, cache_entry: CacheRecord[AnyModel]) -> None:
+    def _delete_cache_entry(self, cache_entry: CacheRecord) -> None:
         self._cache_stack.remove(cache_entry.key)
         del self._cached_models[cache_entry.key]
 
