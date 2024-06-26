@@ -1,6 +1,7 @@
 # Copyright (c) 2024, Lincoln D. Stein and the InvokeAI Development Team
 """Default implementation of model loading in InvokeAI."""
 
+import threading
 from logging import Logger
 from pathlib import Path
 from typing import Optional
@@ -36,6 +37,7 @@ class ModelLoader(ModelLoaderBase):
         self._app_config = app_config
         self._logger = logger
         self._ram_cache = ram_cache
+        self._lock = threading.Lock()
         self._convert_cache = convert_cache
         self._torch_dtype = TorchDevice.choose_torch_dtype()
 
@@ -50,17 +52,18 @@ class ModelLoader(ModelLoaderBase):
         :param submodel_type: an ModelType enum indicating the portion of
                the model to retrieve (e.g. ModelType.Vae)
         """
-        if model_config.type is ModelType.Main and not submodel_type:
-            raise InvalidModelConfigException("submodel_type is required when loading a main model")
+        with self._lock:
+            if model_config.type is ModelType.Main and not submodel_type:
+                raise InvalidModelConfigException("submodel_type is required when loading a main model")
 
-        model_path = self._get_model_path(model_config)
+            model_path = self._get_model_path(model_config)
 
-        if not model_path.exists():
-            raise InvalidModelConfigException(f"Files for model '{model_config.name}' not found at {model_path}")
+            if not model_path.exists():
+                raise InvalidModelConfigException(f"Files for model '{model_config.name}' not found at {model_path}")
 
-        with skip_torch_weight_init():
-            locker = self._convert_and_load(model_config, model_path, submodel_type)
-        return LoadedModel(config=model_config, _locker=locker)
+            with skip_torch_weight_init():
+                locker = self._convert_and_load(model_config, model_path, submodel_type)
+            return LoadedModel(config=model_config, _locker=locker)
 
     @property
     def convert_cache(self) -> ModelConvertCacheBase:
