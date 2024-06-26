@@ -5,14 +5,13 @@ InvokeAI Installer
 import argparse
 import os
 from pathlib import Path
-
+from typing import Optional
 from installer import Installer
 
 
-def find_wheel() -> Path:
+def find_wheel() -> Optional[Path]:
     dist = Path("./dist")
     wheel = next(dist.glob("*.whl"))
-    assert wheel is not None
     return wheel
 
 

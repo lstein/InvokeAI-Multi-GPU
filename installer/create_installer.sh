@@ -76,7 +76,7 @@ if [[ $(python3 -c 'from importlib.util import find_spec; print(find_spec("build
 fi
 
 rm -rf ../build
-
+rm dist/*whl
 python3 -m build --outdir dist/ ../.
 
 # ----------------------
@@ -96,6 +96,8 @@ for f in templates *.txt *.reg; do
 done
 mkdir InvokeAI-Installer/lib
 cp lib/*.py InvokeAI-Installer/lib
+mkdir InvokeAI-Installer/dist
+cp dist/*.whl InvokeAI-Installer/dist
 
 # Install scripts
 # Mac/Linux
