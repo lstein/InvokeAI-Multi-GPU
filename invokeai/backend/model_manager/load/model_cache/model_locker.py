@@ -29,8 +29,11 @@ class ModelLocker(ModelLockerBase):
     @property
     def model(self) -> AnyModel:
         """Return the model without moving it around."""
-        assert isinstance(self._cache_entry, ModelCacheRecord)
-        return self._cache_entry.model
+        entry = self._cache_entry
+        if isinstance(entry, ModelCacheRecord):
+            return entry.model
+        else:
+            return self._cache.model_to_device(entry, torch.device('cpu'))
 
     def get_state_dict(self) -> Optional[Dict[str, torch.Tensor]]:
         """Return the state dict (if any) for the cached model."""

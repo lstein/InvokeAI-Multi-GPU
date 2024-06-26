@@ -224,28 +224,29 @@ class ModelCache(ModelCacheBase[AnyModel]):
         submodel_type: Optional[SubModelType] = None,
     ) -> None:
         """Store model under key and optional submodel_type."""
-        key = self._make_cache_key(key, submodel_type)
-        if key in self._cached_models:
-            return
-        size = calc_model_size_by_data(model)
-        self.make_room(size)
+        with self._ram_lock:
+            key = self._make_cache_key(key, submodel_type)
+            if key in self._cached_models:
+                return
+            size = calc_model_size_by_data(model)
+            self.make_room(size)
 
-        if isinstance(model, torch.nn.Module):
-            cache_record: CacheRecord = ModelConfigCacheRecord(
-                key=key,
-                config=model.config,
-                cls=model.__class__,
-                state_dict=model.state_dict(),
-                size=size,
-            )
-        else:
-            cache_record = ModelCacheRecord(
-                key=key,
-                model=model,
-                size=size,
-            )
-        self._cached_models[key] = cache_record
-        self._cache_stack.append(key)
+            if isinstance(model, torch.nn.Module):
+                cache_record: CacheRecord = ModelConfigCacheRecord(
+                    key=key,
+                    config=model.config,
+                    cls=model.__class__,
+                    state_dict=model.state_dict(),
+                    size=size,
+                )
+            else:
+                cache_record = ModelCacheRecord(
+                    key=key,
+                    model=model,
+                    size=size,
+                )
+            self._cached_models[key] = cache_record
+            self._cache_stack.append(key)
 
     def get(
         self,
